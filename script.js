@@ -26,7 +26,11 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const analytics = getAnalytics(app);
 const db = getFirestore(app);
-const recordsCol = collection(db, "records");
+
+const usernameKey = "dailyAccountingBuddyUsername";
+let currentUsername = "";
+let recordsCol = null;
+let unsubscribeRecords = null;
 
 let data = [];
 
@@ -64,9 +68,67 @@ document.addEventListener("DOMContentLoaded", function () {
   const typeEl     = document.getElementById("type");
   const categoryEl = document.getElementById("category");
   const noteEl     = document.getElementById("note");
+  const usernameEl = document.getElementById("username");
+  const currentUserEl = document.getElementById("currentUser");
   const incomeEl   = document.getElementById("income");
   const expenseEl  = document.getElementById("expense");
   const balanceEl  = document.getElementById("balance");
+
+  function getSavedUsername() {
+    return localStorage.getItem(usernameKey) || "";
+  }
+
+  function saveUsername(username) {
+    localStorage.setItem(usernameKey, username);
+  }
+
+  function sanitizeUsername(raw) {
+    return raw.trim().replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, "").toLowerCase();
+  }
+
+  function updateCurrentUserDisplay(username) {
+    if (currentUserEl) {
+      currentUserEl.textContent = username ? `Current user: ${username}` : "Current user: not set";
+    }
+  }
+
+  function getRecordsCollection(username) {
+    if (!username) {
+      return collection(db, "users", "guest", "records");
+    }
+    return collection(db, "users", username, "records");
+  }
+
+  function bindToUser(username) {
+    if (unsubscribeRecords) {
+      unsubscribeRecords();
+      unsubscribeRecords = null;
+    }
+
+    currentUsername = username || "guest";
+    recordsCol = getRecordsCollection(currentUsername);
+    updateCurrentUserDisplay(currentUsername);
+
+    const recordsQuery = query(recordsCol, orderBy("time", "desc"));
+    unsubscribeRecords = onSnapshot(recordsQuery, snapshot => {
+      data = snapshot.docs.map(docEntry => ({ id: docEntry.id, ...docEntry.data() }));
+      render();
+    }, error => {
+      console.error("Realtime update failed:", error);
+    });
+  }
+
+  function setUsername() {
+    const raw = usernameEl ? usernameEl.value.trim() : "";
+    const username = sanitizeUsername(raw);
+    if (!username) {
+      alert("Please enter a valid username (letters, numbers, dashes, or underscores).");
+      return;
+    }
+
+    saveUsername(username);
+    bindToUser(username);
+  }
 
   async function add() {
     let val = priceEl.value.trim();
@@ -109,13 +171,18 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   async function clearAll() {
+    if (!currentUsername) {
+      alert("Please set a username before clearing history.");
+      return;
+    }
+
     if (!confirm("Clear all history from the app and database? This cannot be undone.")) {
       return;
     }
 
     try {
       const snapshot = await getDocs(recordsCol);
-      const deletePromises = snapshot.docs.map(docEntry => deleteDoc(doc(db, "records", docEntry.id)));
+      const deletePromises = snapshot.docs.map(docEntry => deleteDoc(doc(db, "users", currentUsername, "records", docEntry.id)));
       await Promise.all(deletePromises);
     } catch (error) {
       alert("Failed to clear history: " + error.message);
@@ -411,11 +478,16 @@ document.addEventListener("DOMContentLoaded", function () {
 
   window.add = add;
 
-  const recordsQuery = query(recordsCol, orderBy("time", "desc"));
-  onSnapshot(recordsQuery, snapshot => {
-    data = snapshot.docs.map(docEntry => ({ id: docEntry.id, ...docEntry.data() }));
-    render();
-  }, error => {
-    console.error("Realtime update failed:", error);
-  });
+  const savedUser = getSavedUsername();
+  if (savedUser) {
+    usernameEl.value = savedUser;
+    bindToUser(savedUser);
+  } else {
+    bindToUser("guest");
+  }
+
+  const setUserButton = document.getElementById("setUsername");
+  if (setUserButton) {
+    setUserButton.addEventListener("click", setUsername);
+  }
 }); // end DOMContentLoaded
