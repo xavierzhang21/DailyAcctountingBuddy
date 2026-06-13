@@ -66,6 +66,7 @@ document.addEventListener("DOMContentLoaded", function () {
   const typeEl     = document.getElementById("type");
   const categoryEl = document.getElementById("category");
   const noteEl     = document.getElementById("note");
+  const addButtonEl = document.getElementById("addButton");
   const incomeEl   = document.getElementById("income");
   const expenseEl  = document.getElementById("expense");
   const balanceEl  = document.getElementById("balance");
@@ -92,8 +93,12 @@ document.addEventListener("DOMContentLoaded", function () {
 
   async function add() {
     if (!recordsCol) {
-      alert("Records collection not initialized.");
-      return;
+      // Try to initialize the binding once more before failing
+      bindToRecords();
+      if (!recordsCol) {
+        alert("Records collection not initialized. Please wait a moment and try again.");
+        return;
+      }
     }
 
     let val = priceEl.value.trim();
@@ -105,9 +110,34 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
 
-    const type = typeEl.value;
-    const cat  = categoryEl.value;
-    const note = noteEl.value.trim();
+    // Limit price to a reasonable range
+    if (price > 1e9) {
+      alert("Amount too large.");
+      priceEl.focus();
+      return;
+    }
+
+    const type = String(typeEl.value || "").trim();
+    const cat  = String(categoryEl.value || "").trim();
+    let note = String(noteEl.value || "").trim();
+
+    // Validate type and category against options
+    const validTypes = Array.from(typeEl.options).map(o => o.value);
+    const validCats = Array.from(categoryEl.options).map(o => o.value);
+    if (!validTypes.includes(type)) {
+      alert("Invalid type selected.");
+      return;
+    }
+    if (!validCats.includes(cat)) {
+      alert("Invalid category selected.");
+      return;
+    }
+
+    // Limit note length
+    if (note.length > 200) {
+      alert("Note is too long (max 200 characters).");
+      return;
+    }
     const t    = now();
 
     try {
@@ -439,6 +469,24 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 
   window.add = add;
+
+  function validateForm() {
+    if (!priceEl) return false;
+    const val = priceEl.value.trim();
+    const price = parseFloat(val);
+    if (isNaN(price) || price <= 0 || price > 1e9) return false;
+    return true;
+  }
+
+  function updateAddButtonState() {
+    if (!addButtonEl) return;
+    addButtonEl.disabled = !validateForm();
+  }
+
+  if (priceEl) {
+    priceEl.addEventListener("input", updateAddButtonState);
+  }
+  if (addButtonEl) updateAddButtonState();
 
   // Initialize binding to the shared records collection
   bindToRecords();
