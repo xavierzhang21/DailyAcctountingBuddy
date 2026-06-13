@@ -27,8 +27,10 @@ const app = initializeApp(firebaseConfig);
 const analytics = getAnalytics(app);
 const db = getFirestore(app);
 
-const usernameKey = "dailyAccountingBuddyUsername";
-let currentUsername = "";
+const userIdKey = "dailyAccountingBuddyUserId";
+const passcodePrefix = "dailyAccountingBuddyPasscode_";
+let currentUserId = "";
+let authenticated = false;
 let recordsCol = null;
 let unsubscribeRecords = null;
 
@@ -68,46 +70,73 @@ document.addEventListener("DOMContentLoaded", function () {
   const typeEl     = document.getElementById("type");
   const categoryEl = document.getElementById("category");
   const noteEl     = document.getElementById("note");
-  const usernameEl = document.getElementById("username");
+  const userIdEl   = document.getElementById("userId");
+  const passcodeEl = document.getElementById("passcode");
+  const authButton = document.getElementById("authButton");
+  const authMessageEl = document.getElementById("authMessage");
   const currentUserEl = document.getElementById("currentUser");
   const incomeEl   = document.getElementById("income");
   const expenseEl  = document.getElementById("expense");
   const balanceEl  = document.getElementById("balance");
 
-  function getSavedUsername() {
-    return localStorage.getItem(usernameKey) || "";
+  function getSavedUserId() {
+    return localStorage.getItem(userIdKey) || "";
   }
 
-  function saveUsername(username) {
-    localStorage.setItem(usernameKey, username);
+  function saveUserId(userId) {
+    localStorage.setItem(userIdKey, userId);
   }
 
-  function sanitizeUsername(raw) {
+  function getStoredPasscodeHash(userId) {
+    return localStorage.getItem(passcodePrefix + userId);
+  }
+
+  function setStoredPasscode(userId, passcode) {
+    localStorage.setItem(passcodePrefix + userId, btoa(passcode));
+  }
+
+  function sanitizeUserId(raw) {
     return raw.trim().replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, "").toLowerCase();
   }
 
-  function updateCurrentUserDisplay(username) {
+  function updateCurrentUserDisplay(userId) {
     if (currentUserEl) {
-      currentUserEl.textContent = username ? `Current user: ${username}` : "Current user: not set";
+      currentUserEl.textContent = userId ? `Current user ID: ${userId}` : "Current user ID: not set";
     }
   }
 
-  function getRecordsCollection(username) {
-    if (!username) {
-      return collection(db, "users", "guest", "records");
+  function updateAuthMessage(message) {
+    if (authMessageEl) {
+      authMessageEl.textContent = message;
     }
-    return collection(db, "users", username, "records");
   }
 
-  function bindToUser(username) {
+  function getRecordsCollection(userId) {
+    return collection(db, "users", userId, "records");
+  }
+
+  function bindToUser(userId) {
     if (unsubscribeRecords) {
       unsubscribeRecords();
       unsubscribeRecords = null;
     }
 
-    currentUsername = username || "guest";
-    recordsCol = getRecordsCollection(currentUsername);
-    updateCurrentUserDisplay(currentUsername);
+    if (!userId) {
+      currentUserId = "";
+      authenticated = false;
+      recordsCol = null;
+      data = [];
+      updateAuthMessage("Please log in with your user ID and 6-digit passcode.");
+      updateCurrentUserDisplay("");
+      render();
+      return;
+    }
+
+    currentUserId = userId;
+    authenticated = true;
+    recordsCol = getRecordsCollection(currentUserId);
+    updateCurrentUserDisplay(currentUserId);
+    updateAuthMessage("Logged in successfully.");
 
     const recordsQuery = query(recordsCol, orderBy("time", "desc"));
     unsubscribeRecords = onSnapshot(recordsQuery, snapshot => {
@@ -118,19 +147,46 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  function setUsername() {
-    const raw = usernameEl ? usernameEl.value.trim() : "";
-    const username = sanitizeUsername(raw);
-    if (!username) {
-      alert("Please enter a valid username (letters, numbers, dashes, or underscores).");
+  function authenticate() {
+    const raw = userIdEl ? userIdEl.value.trim() : "";
+    const passcode = passcodeEl ? passcodeEl.value.trim() : "";
+    const userId = sanitizeUserId(raw);
+
+    if (!userId) {
+      alert("Please enter a valid user ID (letters, numbers, dashes, or underscores).\");
       return;
     }
 
-    saveUsername(username);
-    bindToUser(username);
+    if (!/^[0-9]{6}$/.test(passcode)) {
+      alert("Please enter a 6-digit numeric passcode.");
+      return;
+    }
+
+    const storedHash = getStoredPasscodeHash(userId);
+    const passHash = btoa(passcode);
+
+    if (storedHash && storedHash !== passHash) {
+      alert("Incorrect passcode.");
+      return;
+    }
+
+    if (!storedHash) {
+      setStoredPasscode(userId, passcode);
+      alert("New user created and logged in.");
+    }
+
+    saveUserId(userId);
+    bindToUser(userId);
+    if (passcodeEl) passcodeEl.value = "";
   }
 
   async function add() {
+    if (!authenticated || !currentUserId) {
+      alert("Please log in with your user ID and passcode before adding records.");
+      if (userIdEl) userIdEl.focus();
+      return;
+    }
+
     let val = priceEl.value.trim();
     let price = parseFloat(val);
 
@@ -164,15 +220,16 @@ document.addEventListener("DOMContentLoaded", function () {
 
   async function del(id) {
     try {
-      await deleteDoc(doc(db, "records", id));
+      await deleteDoc(doc(db, "users", currentUsername, "records", id));
     } catch (error) {
       alert("Failed to delete record: " + error.message);
     }
   }
 
   async function clearAll() {
-    if (!currentUsername) {
-      alert("Please set a username before clearing history.");
+    if (!authenticated || !currentUserId) {
+      alert("Please log in with your user ID and passcode before clearing history.");
+      if (userIdEl) userIdEl.focus();
       return;
     }
 
@@ -273,6 +330,12 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function importCSV() {
+    if (!authenticated || !currentUserId) {
+      alert("Please log in with your user ID and passcode before importing CSV.");
+      if (userIdEl) userIdEl.focus();
+      return;
+    }
+
     const fileInput = document.getElementById("csvFile");
     if (!fileInput) return;
     fileInput.value = "";
@@ -297,6 +360,8 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   window.del = del;
+  window.clearAll = clearAll;
+  window.importCSV = importCSV;
 
   function stats() {
     const currentYm = now().ym;
@@ -478,16 +543,15 @@ document.addEventListener("DOMContentLoaded", function () {
 
   window.add = add;
 
-  const savedUser = getSavedUsername();
+  const savedUser = getSavedUserId();
   if (savedUser) {
-    usernameEl.value = savedUser;
+    userIdEl.value = savedUser;
     bindToUser(savedUser);
   } else {
-    bindToUser("guest");
+    bindToUser("");
   }
 
-  const setUserButton = document.getElementById("setUsername");
-  if (setUserButton) {
-    setUserButton.addEventListener("click", setUsername);
+  if (authButton) {
+    authButton.addEventListener("click", authenticate);
   }
 }); // end DOMContentLoaded
