@@ -27,10 +27,6 @@ const app = initializeApp(firebaseConfig);
 const analytics = getAnalytics(app);
 const db = getFirestore(app);
 
-const userIdKey = "dailyAccountingBuddyUserId";
-const passcodePrefix = "dailyAccountingBuddyPasscode_";
-let currentUserId = "";
-let authenticated = false;
 let recordsCol = null;
 let unsubscribeRecords = null;
 
@@ -70,74 +66,21 @@ document.addEventListener("DOMContentLoaded", function () {
   const typeEl     = document.getElementById("type");
   const categoryEl = document.getElementById("category");
   const noteEl     = document.getElementById("note");
-  const userIdEl   = document.getElementById("userId");
-  const passcodeEl = document.getElementById("passcode");
-  const authButton = document.getElementById("authButton");
-  const authMessageEl = document.getElementById("authMessage");
-  const currentUserEl = document.getElementById("currentUser");
   const incomeEl   = document.getElementById("income");
   const expenseEl  = document.getElementById("expense");
   const balanceEl  = document.getElementById("balance");
 
-  function getSavedUserId() {
-    return localStorage.getItem(userIdKey) || "";
+  function getRecordsCollection() {
+    return collection(db, "records");
   }
 
-  function saveUserId(userId) {
-    localStorage.setItem(userIdKey, userId);
-  }
-
-  function getStoredPasscodeHash(userId) {
-    return localStorage.getItem(passcodePrefix + userId);
-  }
-
-  function setStoredPasscode(userId, passcode) {
-    localStorage.setItem(passcodePrefix + userId, btoa(passcode));
-  }
-
-  function sanitizeUserId(raw) {
-    return raw.trim().replace(/\s+/g, "_").replace(/[^a-zA-Z0-9_-]/g, "").toLowerCase();
-  }
-
-  function updateCurrentUserDisplay(userId) {
-    if (currentUserEl) {
-      currentUserEl.textContent = userId ? `Current user ID: ${userId}` : "Current user ID: not set";
-    }
-  }
-
-  function updateAuthMessage(message) {
-    if (authMessageEl) {
-      authMessageEl.textContent = message;
-    }
-  }
-
-  function getRecordsCollection(userId) {
-    return collection(db, "users", userId, "records");
-  }
-
-  function bindToUser(userId) {
+  function bindToRecords() {
     if (unsubscribeRecords) {
       unsubscribeRecords();
       unsubscribeRecords = null;
     }
 
-    if (!userId) {
-      currentUserId = "";
-      authenticated = false;
-      recordsCol = null;
-      data = [];
-      updateAuthMessage("Please log in with your user ID and 6-digit passcode.");
-      updateCurrentUserDisplay("");
-      render();
-      return;
-    }
-
-    currentUserId = userId;
-    authenticated = true;
-    recordsCol = getRecordsCollection(currentUserId);
-    updateCurrentUserDisplay(currentUserId);
-    updateAuthMessage("Logged in successfully.");
-
+    recordsCol = getRecordsCollection();
     const recordsQuery = query(recordsCol, orderBy("time", "desc"));
     unsubscribeRecords = onSnapshot(recordsQuery, snapshot => {
       data = snapshot.docs.map(docEntry => ({ id: docEntry.id, ...docEntry.data() }));
@@ -147,43 +90,9 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  function authenticate() {
-    const raw = userIdEl ? userIdEl.value.trim() : "";
-    const passcode = passcodeEl ? passcodeEl.value.trim() : "";
-    const userId = sanitizeUserId(raw);
-
-    if (!userId) {
-      alert("Please enter a valid user ID (letters, numbers, dashes, or underscores).\");
-      return;
-    }
-
-    if (!/^[0-9]{6}$/.test(passcode)) {
-      alert("Please enter a 6-digit numeric passcode.");
-      return;
-    }
-
-    const storedHash = getStoredPasscodeHash(userId);
-    const passHash = btoa(passcode);
-
-    if (storedHash && storedHash !== passHash) {
-      alert("Incorrect passcode.");
-      return;
-    }
-
-    if (!storedHash) {
-      setStoredPasscode(userId, passcode);
-      alert("New user created and logged in.");
-    }
-
-    saveUserId(userId);
-    bindToUser(userId);
-    if (passcodeEl) passcodeEl.value = "";
-  }
-
   async function add() {
-    if (!authenticated || !currentUserId) {
-      alert("Please log in with your user ID and passcode before adding records.");
-      if (userIdEl) userIdEl.focus();
+    if (!recordsCol) {
+      alert("Records collection not initialized.");
       return;
     }
 
@@ -220,26 +129,20 @@ document.addEventListener("DOMContentLoaded", function () {
 
   async function del(id) {
     try {
-      await deleteDoc(doc(db, "users", currentUsername, "records", id));
+        await deleteDoc(doc(db, "records", id));
     } catch (error) {
       alert("Failed to delete record: " + error.message);
     }
   }
 
   async function clearAll() {
-    if (!authenticated || !currentUserId) {
-      alert("Please log in with your user ID and passcode before clearing history.");
-      if (userIdEl) userIdEl.focus();
-      return;
-    }
-
     if (!confirm("Clear all history from the app and database? This cannot be undone.")) {
       return;
     }
 
     try {
       const snapshot = await getDocs(recordsCol);
-      const deletePromises = snapshot.docs.map(docEntry => deleteDoc(doc(db, "users", currentUsername, "records", docEntry.id)));
+      const deletePromises = snapshot.docs.map(docEntry => deleteDoc(doc(db, "records", docEntry.id)));
       await Promise.all(deletePromises);
     } catch (error) {
       alert("Failed to clear history: " + error.message);
@@ -330,12 +233,6 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function importCSV() {
-    if (!authenticated || !currentUserId) {
-      alert("Please log in with your user ID and passcode before importing CSV.");
-      if (userIdEl) userIdEl.focus();
-      return;
-    }
-
     const fileInput = document.getElementById("csvFile");
     if (!fileInput) return;
     fileInput.value = "";
@@ -543,15 +440,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
   window.add = add;
 
-  const savedUser = getSavedUserId();
-  if (savedUser) {
-    userIdEl.value = savedUser;
-    bindToUser(savedUser);
-  } else {
-    bindToUser("");
-  }
-
-  if (authButton) {
-    authButton.addEventListener("click", authenticate);
-  }
+  // Initialize binding to the shared records collection
+  bindToRecords();
 }); // end DOMContentLoaded

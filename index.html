@@ -40,11 +40,7 @@
   </select>
 
   <input id="note" class="note" placeholder="Note (optional)">
-  <input id="userId" class="note" placeholder="Enter user ID">
-  <input id="passcode" class="note" placeholder="Enter 6-digit passcode" inputmode="numeric" maxlength="6">
-  <button id="authButton" class="secondary" type="button">Enter</button>
-  <div id="authMessage" class="meta" style="margin:10px 0 0;">Please log in with your user ID and 6-digit passcode.</div>
-  <div id="currentUser" class="meta" style="margin:10px 0 0;">Current user ID: not set</div>
+  <!-- Authentication removed: app now uses a single shared records collection. -->
   <button class="secondary" onclick="exportCSV()">Export CSV</button>
   <button class="secondary" onclick="importCSV()">Import CSV</button>
   <button class="secondary" onclick="clearAll()">Clear All History</button>
