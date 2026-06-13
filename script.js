@@ -1,24 +1,34 @@
-// ===== Storage =====
-function safeGetRecords() {
-  try {
-    let str = localStorage.getItem("records_v2");
-    if (!str) return [];
-    let arr = JSON.parse(str);
-    return Array.isArray(arr) ? arr : [];
-  } catch (e) {
-    return [];
-  }
-}
+import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
+import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-analytics.js";
+import {
+  getFirestore,
+  collection,
+  doc,
+  addDoc,
+  deleteDoc,
+  getDocs,
+  onSnapshot,
+  query,
+  orderBy
+} from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
 
-let data = safeGetRecords();
+const firebaseConfig = {
+  apiKey: "AIzaSyAzwDJXxVprr1eqbk50AIC7xJ4wzlNquP4",
+  authDomain: "citywishlist.firebaseapp.com",
+  databaseURL: "https://citywishlist-default-rtdb.firebaseio.com",
+  projectId: "citywishlist",
+  storageBucket: "citywishlist.appspot.com",
+  messagingSenderId: "614857649281",
+  appId: "1:614857649281:web:b179bae834eb93c8113180",
+  measurementId: "G-NWHHNVE49C"
+};
 
-function save() {
-  try {
-    localStorage.setItem("records_v2", JSON.stringify(data));
-  } catch (e) {
-    alert("存储失败：浏览器可能开启了隐私模式或存储已满");
-  }
-}
+const app = initializeApp(firebaseConfig);
+const analytics = getAnalytics(app);
+const db = getFirestore(app);
+const recordsCol = collection(db, "records");
+
+let data = [];
 
 // ===== Utils =====
 function now() {
@@ -35,27 +45,21 @@ function now() {
   };
 }
 
-// FIX #7: Use crypto.randomUUID() to avoid ID collisions from Date.now()
 function generateId() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
     return crypto.randomUUID();
   }
-  // Fallback for older browsers
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
 
-// FIX #6: Escape HTML to prevent XSS via note field
 function escapeHTML(str) {
   const div = document.createElement("div");
   div.appendChild(document.createTextNode(str));
   return div.innerHTML;
 }
 
-// ===== DOM (inside DOMContentLoaded to fix #3) =====
-// FIX #3: Wrap all DOM access and init inside DOMContentLoaded so the script
-//         can safely be placed in <head> or loaded with defer.
+// ===== DOM (inside DOMContentLoaded) =====
 document.addEventListener("DOMContentLoaded", function () {
-
   const priceEl    = document.getElementById("price");
   const typeEl     = document.getElementById("type");
   const categoryEl = document.getElementById("category");
@@ -64,13 +68,12 @@ document.addEventListener("DOMContentLoaded", function () {
   const expenseEl  = document.getElementById("expense");
   const balanceEl  = document.getElementById("balance");
 
-  // ===== Add Record =====
-  function add() {
+  async function add() {
     let val = priceEl.value.trim();
     let price = parseFloat(val);
 
     if (isNaN(price) || price <= 0) {
-      alert("请输入有效金额（如 10.5）");
+      alert("Please enter a valid amount like 10.50");
       priceEl.focus();
       return;
     }
@@ -80,35 +83,154 @@ document.addEventListener("DOMContentLoaded", function () {
     const note = noteEl.value.trim();
     const t    = now();
 
-    data.push({
-      id: generateId(), // FIX #7: collision-safe ID
-      price,
-      type,
-      cat,
-      note,
-      ym:   t.ym,
-      time: t.time
+    try {
+      await addDoc(recordsCol, {
+        price,
+        type,
+        cat,
+        note,
+        ym: t.ym,
+        time: t.time
+      });
+
+      priceEl.value = "";
+      noteEl.value  = "";
+    } catch (error) {
+      alert("Failed to save record: " + error.message);
+    }
+  }
+
+  async function del(id) {
+    try {
+      await deleteDoc(doc(db, "records", id));
+    } catch (error) {
+      alert("Failed to delete record: " + error.message);
+    }
+  }
+
+  async function clearAll() {
+    if (!confirm("Clear all history from the app and database? This cannot be undone.")) {
+      return;
+    }
+
+    try {
+      const snapshot = await getDocs(recordsCol);
+      const deletePromises = snapshot.docs.map(docEntry => deleteDoc(doc(db, "records", docEntry.id)));
+      await Promise.all(deletePromises);
+    } catch (error) {
+      alert("Failed to clear history: " + error.message);
+    }
+  }
+
+  function parseCsvLine(line) {
+    const fields = [];
+    let value = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          value += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+        continue;
+      }
+
+      if (char === "," && !inQuotes) {
+        fields.push(value);
+        value = "";
+        continue;
+      }
+
+      value += char;
+    }
+
+    fields.push(value);
+    return fields;
+  }
+
+  async function processCsvContent(text) {
+    const lines = text.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
+    if (lines.length < 2) {
+      alert("CSV file must contain a header row and at least one record.");
+      return;
+    }
+
+    const header = parseCsvLine(lines[0]).map(cell => cell.trim().toLowerCase());
+    const timeIndex = header.findIndex(h => h === "time" || h === "时间");
+    const typeIndex = header.findIndex(h => h === "type" || h === "类型");
+    const categoryIndex = header.findIndex(h => h === "category" || h === "分类");
+    const amountIndex = header.findIndex(h => h === "amount" || h === "金额");
+    const noteIndex = header.findIndex(h => h === "note" || h === "备注");
+
+    if (typeIndex === -1 || categoryIndex === -1 || amountIndex === -1) {
+      alert("CSV header must include Type, Category, and Amount columns.");
+      return;
+    }
+
+    const importPromises = [];
+    let importedCount = 0;
+
+    for (let i = 1; i < lines.length; i++) {
+      const fields = parseCsvLine(lines[i]);
+      const price = parseFloat(fields[amountIndex] || "");
+      if (isNaN(price) || price <= 0) continue;
+
+      const type = (fields[typeIndex] || "out").trim();
+      const cat = (fields[categoryIndex] || "Other").trim();
+      const note = (noteIndex !== -1 ? (fields[noteIndex] || "").trim() : "").trim();
+      const time = timeIndex !== -1 && fields[timeIndex] ? fields[timeIndex].trim() : now().time;
+      const ym = time ? time.slice(0, 7) : now().ym;
+
+      importPromises.push(addDoc(recordsCol, {
+        price,
+        type,
+        cat,
+        note,
+        ym,
+        time
+      }));
+      importedCount++;
+    }
+
+    try {
+      await Promise.all(importPromises);
+      alert(`Imported ${importedCount} record${importedCount === 1 ? "" : "s"}.`);
+    } catch (error) {
+      alert("Failed to import CSV: " + error.message);
+    }
+  }
+
+  function importCSV() {
+    const fileInput = document.getElementById("csvFile");
+    if (!fileInput) return;
+    fileInput.value = "";
+    fileInput.click();
+  }
+
+  const csvFileInput = document.getElementById("csvFile");
+  if (csvFileInput) {
+    csvFileInput.addEventListener("change", event => {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = e => {
+        processCsvContent(String(e.target.result));
+      };
+      reader.onerror = () => {
+        alert("Unable to read CSV file.");
+      };
+      reader.readAsText(file, "UTF-8");
     });
-
-    priceEl.value = "";
-    noteEl.value  = "";
-
-    save();
-    render();
   }
 
-  // ===== Delete =====
-  function del(id) {
-    data = data.filter(x => x.id !== id);
-    save();
-    render();
-  }
-
-  // Expose del() globally so inline onclick="del(...)" in the list works
   window.del = del;
 
-  // ===== Stats =====
-  // FIX #4: Stats now show current month only, with an all-time total fallback label
   function stats() {
     const currentYm = now().ym;
     let income  = 0;
@@ -125,11 +247,9 @@ document.addEventListener("DOMContentLoaded", function () {
     balanceEl.textContent = (income - expense).toFixed(2);
   }
 
-  // ===== Trend Chart =====
   let trendChart;
 
   function trend() {
-    // FIX #9: null-check canvas before using it
     const canvas = document.getElementById("trend");
     if (!canvas) return;
 
@@ -142,7 +262,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
     const labels = Object.keys(map).sort();
     const values = labels.map(m => map[m]);
-
     const ctx = canvas.getContext("2d");
 
     if (trendChart) trendChart.destroy();
@@ -152,7 +271,7 @@ document.addEventListener("DOMContentLoaded", function () {
       data: {
         labels,
         datasets: [{
-          label: "月度支出",
+          label: "Monthly Expense",
           data: values,
           borderColor: "#00A395",
           backgroundColor: "rgba(0,163,149,0.1)",
@@ -168,11 +287,9 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // ===== Pie Chart =====
   let pieChart;
 
   function pie() {
-    // FIX #9: null-check canvas before using it
     const canvas = document.getElementById("pie");
     if (!canvas) return;
 
@@ -186,7 +303,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
     const labels = Object.keys(map);
     const values = labels.map(k => map[k]);
-
     const ctx = canvas.getContext("2d");
 
     if (pieChart) pieChart.destroy();
@@ -209,7 +325,6 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // ===== List Rendering =====
   function list() {
     const box = document.getElementById("records");
     if (!box) return;
@@ -239,8 +354,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
             const sign = r.type === "in" ? "+" : "-";
             const cls  = r.type === "in" ? "income" : "expense";
-
-            // FIX #6: Use escapeHTML() on user-supplied fields to prevent XSS
             const safeNote = r.note ? "· " + escapeHTML(r.note) : "";
             const safeCat  = escapeHTML(r.cat);
             const safeTime = escapeHTML(r.time);
@@ -261,15 +374,13 @@ document.addEventListener("DOMContentLoaded", function () {
       });
   }
 
-  // ===== Export CSV =====
-  // FIX #8: Wrap all fields in quotes and escape internal quotes to handle commas in notes
   function escapeCsvField(value) {
     const str = String(value == null ? "" : value);
     return `"${str.replace(/"/g, '""')}"`;
   }
 
   function exportCSV() {
-    const rows = [["时间", "类型", "分类", "金额", "备注"].map(escapeCsvField).join(",")];
+    const rows = [["Time", "Type", "Category", "Amount", "Note"].map(escapeCsvField).join(",")];
 
     data.forEach(r => {
       rows.push([r.time, r.type, r.cat, r.price, r.note || ""].map(escapeCsvField).join(","));
@@ -281,14 +392,12 @@ document.addEventListener("DOMContentLoaded", function () {
 
     const a = document.createElement("a");
     a.href     = URL.createObjectURL(blob);
-    a.download = "记账记录.csv";
+    a.download = "records.csv";
     a.click();
   }
 
-  // Expose exportCSV globally so an HTML button's onclick can reach it
   window.exportCSV = window.exportCSV || exportCSV;
 
-  // ===== Main Render =====
   function render() {
     stats();
     trend();
@@ -296,15 +405,17 @@ document.addEventListener("DOMContentLoaded", function () {
     list();
   }
 
-  // ===== Events =====
   priceEl.addEventListener("keypress", e => {
     if (e.key === "Enter") add();
   });
 
-  // Expose add() globally for any inline onclick="add()" in HTML
   window.add = add;
 
-  // ===== Init =====
-  render();
-
+  const recordsQuery = query(recordsCol, orderBy("time", "desc"));
+  onSnapshot(recordsQuery, snapshot => {
+    data = snapshot.docs.map(docEntry => ({ id: docEntry.id, ...docEntry.data() }));
+    render();
+  }, error => {
+    console.error("Realtime update failed:", error);
+  });
 }); // end DOMContentLoaded
